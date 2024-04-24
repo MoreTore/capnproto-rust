@@ -25,6 +25,15 @@ impl Indent {
         }
     }
 
+    fn next_with_num(self, num: usize) -> Self {
+        match self.indent {
+            None => self,
+            Some(x) => Self {
+                indent: Some(x + num),
+            },
+        }
+    }
+
     fn maybe_newline(&self, formatter: &mut Formatter) -> Result<(), fmt::Error> {
         match self.indent {
             None => Ok(()),
@@ -59,7 +68,7 @@ pub(crate) fn print(
     indent: Indent,
 ) -> Result<(), fmt::Error> {
     match value {
-        dynamic_value::Reader::Void => formatter.write_str("()"),
+        dynamic_value::Reader::Void => formatter.write_str("{}"),
         dynamic_value::Reader::Bool(b) => formatter.write_fmt(format_args!("{b}")),
         dynamic_value::Reader::Int8(x) => formatter.write_fmt(format_args!("{x}")),
         dynamic_value::Reader::Int16(x) => formatter.write_fmt(format_args!("{x}")),
@@ -73,17 +82,57 @@ pub(crate) fn print(
         dynamic_value::Reader::Float64(x) => formatter.write_fmt(format_args!("{x}")),
         dynamic_value::Reader::Enum(e) => match cvt(e.get_enumerant())? {
             Some(enumerant) => {
-                formatter.write_str(cvt(cvt(enumerant.get_proto().get_name())?.to_str())?)
+                formatter.write_str("\"")?;
+                formatter.write_str(cvt(cvt(enumerant.get_proto().get_name())?.to_str())?)?;
+                formatter.write_str("\"")
             }
             None => formatter.write_fmt(format_args!("{}", e.get_value())),
         },
         dynamic_value::Reader::Text(t) => formatter.write_fmt(format_args!("{t:?}")),
         dynamic_value::Reader::Data(d) => {
-            formatter.write_str("0x\"")?;
-            for b in d {
-                formatter.write_fmt(format_args!("{:02x}", *b))?;
+            const MAX_LENGTH: usize = 16;  // Define the maximum length of each segment            
+            const ASCI_MAX_LENGTH: usize = 64;
+        
+            // Check if all characters are ASCII-printable or handleable special characters
+            let is_ascii = d.iter().all(|&b| (b >= 0x20 && b <= 0x7E) || b == b'\n' || b == b'\r' || b == b'\t');
+
+            let indent2 = indent.next_with_num(5);
+            if is_ascii {
+                formatter.write_str("b'")?;  // Start with a single quote for ASCII output
+                for (i, chunk) in d.chunks(ASCI_MAX_LENGTH).enumerate() {
+                    if i > 0 {
+                        formatter.write_str("'")?;
+                        indent2.comma(formatter)?;
+                        indent2.maybe_newline(formatter)?;
+                        formatter.write_str("b'")?;  // Start new segment
+                    }
+                    for &b in chunk {
+                        match b {
+                            b'\n' => formatter.write_str("\\n")?,
+                            b'\r' => formatter.write_str("\\r")?,
+                            b'\t' => formatter.write_str("\\t")?,
+                            _ => formatter.write_fmt(format_args!("{}", b as char))?,
+                        }
+                    }
+                }
+                formatter.write_str("'")?;  // Close the final string
+            } else {
+                formatter.write_str("b'")?;  // Start with "b'" for byte string output
+                for (i, chunk) in d.chunks(MAX_LENGTH).enumerate() {
+                    if i > 0 {
+                        formatter.write_str("'")?;
+                        indent2.comma(formatter)?;
+                        indent2.maybe_newline(formatter)?;
+                        formatter.write_str("b'")?;  // Start new byte string segment
+                    }
+                    for &b in chunk {
+                        formatter.write_fmt(format_args!("x{:02x}\\", b))?;
+                    }
+                }
+                formatter.write_str("'")?;  // Close the final string
             }
-            formatter.write_str("\"")
+            
+            Ok(())
         }
         dynamic_value::Reader::List(list) => {
             if list.is_empty() {
@@ -107,9 +156,9 @@ pub(crate) fn print(
             let union_fields = cvt(schema.get_union_fields())?;
             let non_union_fields = cvt(schema.get_non_union_fields())?;
             if union_fields.len() + non_union_fields.len() == 0 {
-                return formatter.write_str("()");
+                return formatter.write_str("{}");
             }
-            formatter.write_str("(")?;
+            formatter.write_str("{")?;
             let indent2 = indent.next();
             let mut union_field = match cvt(st.which())? {
                 None => None,
@@ -133,8 +182,11 @@ pub(crate) fn print(
                             indent2.comma(formatter)?;
                         }
                         indent2.maybe_newline(formatter)?;
+                        formatter.write_str("\"")?;
                         formatter.write_str(cvt(cvt(ff.get_proto().get_name())?.to_str())?)?;
-                        formatter.write_str(" = ")?;
+                        
+                        formatter.write_str("\"")?;
+                        formatter.write_str(" : ")?;
                         print(cvt(st.get(ff))?, formatter, indent2)?;
                         union_field = None;
                     }
@@ -146,9 +198,12 @@ pub(crate) fn print(
                         indent2.comma(formatter)?;
                     }
                     indent2.maybe_newline(formatter)?;
+                    formatter.write_str("\"")?;
                     formatter.write_str(cvt(cvt(field.get_proto().get_name())?.to_str())?)?;
-                    formatter.write_str(" = ")?;
+                    formatter.write_str("\"")?;
+                    formatter.write_str(" : ")?;
                     print(cvt(st.get(field))?, formatter, indent2)?;
+                    
                 }
             }
             if let Some(ff) = union_field {
@@ -157,12 +212,14 @@ pub(crate) fn print(
                     indent2.comma(formatter)?;
                 }
                 indent2.maybe_newline(formatter)?;
+                formatter.write_str("\"")?;
                 formatter.write_str(cvt(cvt(ff.get_proto().get_name())?.to_str())?)?;
-                formatter.write_str(" = ")?;
+                formatter.write_str("\"")?;
+                formatter.write_str(" : ")?;
                 print(cvt(st.get(ff))?, formatter, indent2)?;
             }
             indent.maybe_newline(formatter)?;
-            formatter.write_str(")")
+            formatter.write_str("}")
         }
         dynamic_value::Reader::AnyPointer(_) => formatter.write_str("<opaque pointer>"),
         dynamic_value::Reader::Capability(_) => formatter.write_str("<external capability>"),
