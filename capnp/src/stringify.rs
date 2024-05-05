@@ -61,7 +61,7 @@ fn cvt<T, E>(r: core::result::Result<T, E>) -> Result<T, fmt::Error> {
         Err(_) => Err(fmt::Error),
     }
 }
-
+use std::fmt::Write;
 pub(crate) fn print(
     value: dynamic_value::Reader,
     formatter: &mut Formatter,
@@ -91,47 +91,49 @@ pub(crate) fn print(
         dynamic_value::Reader::Text(t) => formatter.write_fmt(format_args!("{t:?}")),
         dynamic_value::Reader::Data(d) => {
             const MAX_LENGTH: usize = 16;  // Define the maximum length of each segment            
-            const ASCI_MAX_LENGTH: usize = 64;
-        
-            // Check if all characters are ASCII-printable or handleable special characters
-            let is_ascii = d.iter().all(|&b| (b >= 0x20 && b <= 0x7E) || b == b'\n' || b == b'\r' || b == b'\t');
-
+            const MAX_UTF8_LENGTH: usize = 64;
+            // Attempt to convert byte slice to a UTF-8 string
             let indent2 = indent.next_with_num(5);
-            if is_ascii {
-                formatter.write_str("b'")?;  // Start with a single quote for ASCII output
-                for (i, chunk) in d.chunks(ASCI_MAX_LENGTH).enumerate() {
-                    if i > 0 {
-                        formatter.write_str("'")?;
-                        indent2.comma(formatter)?;
-                        indent2.maybe_newline(formatter)?;
-                        formatter.write_str("b'")?;  // Start new segment
+            match std::str::from_utf8(d) {
+                Ok(text) => {
+                    // If the data is valid UTF-8, output as a regular string
+                    formatter.write_str("\"")?; // Use double quotes for UTF-8 string output
+                    let mut count = 0;
+                    for c in text.chars() {
+                        if count >= MAX_UTF8_LENGTH {
+                            indent2.maybe_newline(formatter)?;  // Break into a new line
+                            count = 0;
+                        }
+                        match c {
+                            '\n' => formatter.write_str("\\n")?,
+                            '\r' => formatter.write_str("\\r")?,
+                            '\t' => formatter.write_str("\\t")?,
+                            '"'  => formatter.write_str("\\\"")?,  // Escape double quote
+                            '\\' => formatter.write_str("\\\\")?, // Escape backslash
+                            _    => formatter.write_char(c)?,
+                        }
+                        count += c.len_utf8();
                     }
-                    for &b in chunk {
-                        match b {
-                            b'\n' => formatter.write_str("\\n")?,
-                            b'\r' => formatter.write_str("\\r")?,
-                            b'\t' => formatter.write_str("\\t")?,
-                            _ => formatter.write_fmt(format_args!("{}", b as char))?,
+                    formatter.write_str("\"")?; // Close the string with double quotes
+                },
+                Err(_) => {
+                    // If the data is not valid UTF-8, fallback to hexadecimal representation
+                    formatter.write_str("b'")?; // Start with "b'" for byte string output
+                    for (i, chunk) in d.chunks(MAX_LENGTH).enumerate() {
+                        if i > 0 {
+                            formatter.write_str("'")?;
+                            indent2.comma(formatter)?;
+                            indent2.maybe_newline(formatter)?;
+                            formatter.write_str(" b'")?; // Start new byte string segment on a new line
+                        }
+                        for &b in chunk {
+                            formatter.write_fmt(format_args!("\\x{:02x}", b))?;
                         }
                     }
+                    formatter.write_str("'")?; // Close the final string
                 }
-                formatter.write_str("'")?;  // Close the final string
-            } else {
-                formatter.write_str("b'")?;  // Start with "b'" for byte string output
-                for (i, chunk) in d.chunks(MAX_LENGTH).enumerate() {
-                    if i > 0 {
-                        formatter.write_str("'")?;
-                        indent2.comma(formatter)?;
-                        indent2.maybe_newline(formatter)?;
-                        formatter.write_str("b'")?;  // Start new byte string segment
-                    }
-                    for &b in chunk {
-                        formatter.write_fmt(format_args!("x{:02x}\\", b))?;
-                    }
-                }
-                formatter.write_str("'")?;  // Close the final string
             }
-            
+        
             Ok(())
         }
         dynamic_value::Reader::List(list) => {
