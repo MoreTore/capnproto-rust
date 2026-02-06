@@ -61,6 +61,19 @@ fn cvt<T, E>(r: core::result::Result<T, E>) -> Result<T, fmt::Error> {
         Err(_) => Err(fmt::Error),
     }
 }
+
+fn write_data_byte(formatter: &mut Formatter, b: u8) -> Result<(), fmt::Error> {
+    match b {
+        b'\n' => formatter.write_str("\\n"),
+        b'\r' => formatter.write_str("\\r"),
+        b'\t' => formatter.write_str("\\t"),
+        b'\\' => formatter.write_str("\\\\"),
+        b'\'' => formatter.write_str("\\'"),
+        0x20..=0x7e => formatter.write_char(b as char),
+        _ => formatter.write_fmt(format_args!("\\x{:02x}", b)),
+    }
+}
+
 use std::fmt::Write;
 pub(crate) fn print(
     value: dynamic_value::Reader,
@@ -127,7 +140,7 @@ pub(crate) fn print(
                             formatter.write_str(" b'")?; // Start new byte string segment on a new line
                         }
                         for &b in chunk {
-                            formatter.write_fmt(format_args!("\\x{:02x}", b))?;
+                            write_data_byte(formatter, b)?;
                         }
                     }
                     formatter.write_str("'")?; // Close the final string
@@ -236,5 +249,25 @@ impl<'a> fmt::Debug for dynamic_value::Reader<'a> {
             Indent::no_indent()
         };
         print(*self, f, indent)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn data_stringify_uses_ascii_when_possible() {
+        let value = crate::dynamic_value::Reader::Data(&[
+            b'P', b'X', b'4', b'W', b'-', b'1', b'8', b'8', b'K', b'2', b'-', 0x00, 0xff, b'\\',
+            b'\'', b'\n',
+        ]);
+
+        assert_eq!(format!("{value:?}"), "b'PX4W-188K2-\\x00\\xff\\\\\\'\\n'");
+    }
+
+    #[test]
+    fn data_stringify_keeps_utf8_text_human_readable() {
+        let value = crate::dynamic_value::Reader::Data("hello world".as_bytes());
+
+        assert_eq!(format!("{value:?}"), "\"hello world\"");
     }
 }
