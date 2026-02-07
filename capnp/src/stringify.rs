@@ -74,6 +74,15 @@ fn write_data_byte(formatter: &mut Formatter, b: u8) -> Result<(), fmt::Error> {
     }
 }
 
+fn data_as_text_if_printable(d: &[u8]) -> Option<&str> {
+    let text = core::str::from_utf8(d).ok()?;
+    if text.chars().all(|c| !c.is_control()) {
+        Some(text)
+    } else {
+        None
+    }
+}
+
 use std::fmt::Write;
 pub(crate) fn print(
     value: dynamic_value::Reader,
@@ -103,12 +112,12 @@ pub(crate) fn print(
         },
         dynamic_value::Reader::Text(t) => formatter.write_fmt(format_args!("{t:?}")),
         dynamic_value::Reader::Data(d) => {
-            const MAX_LENGTH: usize = 16;  // Define the maximum length of each segment            
-            const MAX_UTF8_LENGTH: usize = 64;
+            const MAX_LENGTH: usize = 24;  // Define the maximum length of each segment            
+            const MAX_UTF8_LENGTH: usize = 96;
             // Attempt to convert byte slice to a UTF-8 string
             let indent2 = indent.next_with_num(5);
-            match std::str::from_utf8(d) {
-                Ok(text) => {
+            match data_as_text_if_printable(d) {
+                Some(text) => {
                     // If the data is valid UTF-8, output as a regular string
                     formatter.write_str("\"")?; // Use double quotes for UTF-8 string output
                     let mut count = 0;
@@ -129,7 +138,7 @@ pub(crate) fn print(
                     }
                     formatter.write_str("\"")?; // Close the string with double quotes
                 },
-                Err(_) => {
+                None => {
                     // If the data is not valid UTF-8, fallback to hexadecimal representation
                     formatter.write_str("b'")?; // Start with "b'" for byte string output
                     for (i, chunk) in d.chunks(MAX_LENGTH).enumerate() {
@@ -269,5 +278,12 @@ mod tests {
         let value = crate::dynamic_value::Reader::Data("hello world".as_bytes());
 
         assert_eq!(format!("{value:?}"), "\"hello world\"");
+    }
+
+    #[test]
+    fn data_stringify_with_nul_uses_byte_literal() {
+        let value = crate::dynamic_value::Reader::Data(b"PXKJ-188K2-A\0\0");
+
+        assert_eq!(format!("{value:?}"), "b'PXKJ-188K2-A\\x00\\x00'");
     }
 }
