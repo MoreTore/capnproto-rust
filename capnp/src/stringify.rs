@@ -64,21 +64,10 @@ fn cvt<T, E>(r: core::result::Result<T, E>) -> Result<T, fmt::Error> {
 
 fn write_data_byte(formatter: &mut Formatter, b: u8) -> Result<(), fmt::Error> {
     match b {
-        b'\n' => formatter.write_str("\\n"),
-        b'\r' => formatter.write_str("\\r"),
-        b'\t' => formatter.write_str("\\t"),
         b'\\' => formatter.write_str("\\\\"),
         b'\'' => formatter.write_str("\\'"),
         0x20..=0x7e => formatter.write_char(b as char),
         _ => formatter.write_fmt(format_args!("\\x{:02x}", b)),
-    }
-}
-
-fn data_as_text_if_printable(d: &[u8]) -> Option<&str> {
-    if d.iter().all(|&b| matches!(b, 0x20..=0x7e)) {
-        core::str::from_utf8(d).ok()
-    } else {
-        None
     }
 }
 
@@ -111,50 +100,22 @@ pub(crate) fn print(
         },
         dynamic_value::Reader::Text(t) => formatter.write_fmt(format_args!("{t:?}")),
         dynamic_value::Reader::Data(d) => {
-            const MAX_LENGTH: usize = 24;  // Define the maximum length of each segment            
-            const MAX_UTF8_LENGTH: usize = 96;
-            // Attempt to convert byte slice to a UTF-8 string
+            const MAX_LENGTH: usize = 24; // Maximum length of each byte literal segment.
             let indent2 = indent.next_with_num(5);
-            match data_as_text_if_printable(d) {
-                Some(text) => {
-                    // If the data is valid UTF-8, output as a regular string
-                    formatter.write_str("\"")?; // Use double quotes for UTF-8 string output
-                    let mut count = 0;
-                    for c in text.chars() {
-                        if count >= MAX_UTF8_LENGTH {
-                            indent2.maybe_newline(formatter)?;  // Break into a new line
-                            count = 0;
-                        }
-                        match c {
-                            '\n' => formatter.write_str("\\n")?,
-                            '\r' => formatter.write_str("\\r")?,
-                            '\t' => formatter.write_str("\\t")?,
-                            '"'  => formatter.write_str("\\\"")?,  // Escape double quote
-                            '\\' => formatter.write_str("\\\\")?, // Escape backslash
-                            _    => formatter.write_char(c)?,
-                        }
-                        count += c.len_utf8();
-                    }
-                    formatter.write_str("\"")?; // Close the string with double quotes
-                },
-                None => {
-                    // If the data is not valid UTF-8, fallback to hexadecimal representation
-                    formatter.write_str("b'")?; // Start with "b'" for byte string output
-                    for (i, chunk) in d.chunks(MAX_LENGTH).enumerate() {
-                        if i > 0 {
-                            formatter.write_str("'")?;
-                            indent2.comma(formatter)?;
-                            indent2.maybe_newline(formatter)?;
-                            formatter.write_str(" b'")?; // Start new byte string segment on a new line
-                        }
-                        for &b in chunk {
-                            write_data_byte(formatter, b)?;
-                        }
-                    }
-                    formatter.write_str("'")?; // Close the final string
+            formatter.write_str("b'")?; // Start with "b'" for byte string output
+            for (i, chunk) in d.chunks(MAX_LENGTH).enumerate() {
+                if i > 0 {
+                    formatter.write_str("'")?;
+                    indent2.comma(formatter)?;
+                    indent2.maybe_newline(formatter)?;
+                    formatter.write_str(" b'")?; // Start new byte string segment on a new line
+                }
+                for &b in chunk {
+                    write_data_byte(formatter, b)?;
                 }
             }
-        
+            formatter.write_str("'")?; // Close the final string
+
             Ok(())
         }
         dynamic_value::Reader::List(list) => {
@@ -263,20 +224,23 @@ impl<'a> fmt::Debug for dynamic_value::Reader<'a> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn data_stringify_uses_ascii_when_possible() {
+    fn data_stringify_uses_ascii_and_hex_byte_literals() {
         let value = crate::dynamic_value::Reader::Data(&[
             b'P', b'X', b'4', b'W', b'-', b'1', b'8', b'8', b'K', b'2', b'-', 0x00, 0xff, b'\\',
             b'\'', b'\n',
         ]);
 
-        assert_eq!(format!("{value:?}"), "b'PX4W-188K2-\\x00\\xff\\\\\\'\\n'");
+        assert_eq!(
+            format!("{value:?}"),
+            "b'PX4W-188K2-\\x00\\xff\\\\\\'\\x0a'"
+        );
     }
 
     #[test]
-    fn data_stringify_keeps_utf8_text_human_readable() {
+    fn data_stringify_ascii_utf8_uses_ascii_byte_literals() {
         let value = crate::dynamic_value::Reader::Data("hello world".as_bytes());
 
-        assert_eq!(format!("{value:?}"), "\"hello world\"");
+        assert_eq!(format!("{value:?}"), "b'hello world'");
     }
 
     #[test]
@@ -297,6 +261,6 @@ mod tests {
     fn data_stringify_with_control_bytes_uses_byte_literal() {
         let value = crate::dynamic_value::Reader::Data(b">\t\x04");
 
-        assert_eq!(format!("{value:?}"), "b'>\\t\\x04'");
+        assert_eq!(format!("{value:?}"), "b'>\\x09\\x04'");
     }
 }
