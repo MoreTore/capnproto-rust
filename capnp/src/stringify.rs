@@ -75,9 +75,8 @@ fn write_data_byte(formatter: &mut Formatter, b: u8) -> Result<(), fmt::Error> {
 }
 
 fn data_as_text_if_printable(d: &[u8]) -> Option<&str> {
-    let text = core::str::from_utf8(d).ok()?;
-    if text.chars().all(|c| !c.is_control()) {
-        Some(text)
+    if d.iter().all(|&b| matches!(b, 0x20..=0x7e)) {
+        core::str::from_utf8(d).ok()
     } else {
         None
     }
@@ -285,5 +284,19 @@ mod tests {
         let value = crate::dynamic_value::Reader::Data(b"PXKJ-188K2-A\0\0");
 
         assert_eq!(format!("{value:?}"), "b'PXKJ-188K2-A\\x00\\x00'");
+    }
+
+    #[test]
+    fn data_stringify_with_non_ascii_utf8_uses_byte_literal() {
+        let value = crate::dynamic_value::Reader::Data("café".as_bytes());
+
+        assert_eq!(format!("{value:?}"), "b'caf\\xc3\\xa9'");
+    }
+
+    #[test]
+    fn data_stringify_with_control_bytes_uses_byte_literal() {
+        let value = crate::dynamic_value::Reader::Data(b">\t\x04");
+
+        assert_eq!(format!("{value:?}"), "b'>\\t\\x04'");
     }
 }
